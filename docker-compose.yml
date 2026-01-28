@@ -1,0 +1,118 @@
+services:
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    depends_on:
+      - zookeeper
+    ports:
+      - "19092:19092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,PLAINTEXT_HOST://0.0.0.0:19092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:19092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+
+  kafka-connect:
+    image: confluentinc/cp-kafka-connect:7.6.0
+    depends_on:
+      - kafka
+    ports:
+      - "8083:8083"
+    environment:
+      CONNECT_BOOTSTRAP_SERVERS: kafka:9092
+      CONNECT_REST_ADVERTISED_HOST_NAME: kafka-connect
+      CONNECT_GROUP_ID: "connect-cluster"
+      CONNECT_CONFIG_STORAGE_TOPIC: "connect-configs"
+      CONNECT_OFFSET_STORAGE_TOPIC: "connect-offsets"
+      CONNECT_STATUS_STORAGE_TOPIC: "connect-status"
+      CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_STATUS_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_KEY_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      CONNECT_VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      CONNECT_KEY_CONVERTER_SCHEMAS_ENABLE: "false"
+      CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE: "false"
+      CONNECT_PLUGIN_PATH: "/usr/share/java,/usr/share/confluent-hub-components"
+    volumes:
+      - ./plugins:/usr/share/confluent-hub-components
+
+  mongodb:
+    image: mongo:8-noble
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_DATABASE: mailtracking
+    volumes:
+      - mongo-data:/data/db
+
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    ports:
+      - "1433:1433"
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "${MSSQL_PASSWORD}"
+      MSSQL_PID: "Developer"
+      PATH: "/opt/mssql-tools18/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+    volumes:
+      - sqlserver-data:/var/opt/mssql
+
+  ksqldb-server:
+    image: confluentinc/cp-ksqldb-server:7.6.0
+    hostname: ksqldb-server
+    container_name: ksqldb-server
+    depends_on:
+      - kafka
+      - kafka-connect
+    ports:
+      - "8088:8088"
+    environment:
+      KSQL_LISTENERS: http://0.0.0.0:8088
+      KSQL_BOOTSTRAP_SERVERS: kafka:9092
+      KSQL_KSQL_SERVICE_ID: mailtracking_ksql_
+      KSQL_KSQL_HIDDEN_TOPICS: '^_.*'
+      KSQL_KSQL_CONNECT_URL: http://kafka-connect:8083
+      KSQL_KSQL_LOGGING_PROCESSING_TOPIC_REPLICATION_FACTOR: 1
+      KSQL_KSQL_LOGGING_PROCESSING_STREAM_AUTO_CREATE: "true"
+      KSQL_KSQL_LOGGING_PROCESSING_ROWS_INCLUDE_ENTITY_KEY: "true"
+
+  ksql-setup:
+    image: confluentinc/cp-ksqldb-cli:7.6.0
+    container_name: ksql-setup
+    depends_on:
+      - ksqldb-server
+    volumes:
+      - ./ksql:/scripts
+    entrypoint: /bin/sh
+    command: >
+      -c "echo 'Waiting for ksqlDB Server...';
+          until [ \"$$(curl -s -o /dev/null -w %{http_code} http://ksqldb-server:8088/healthcheck)\" = \"200\" ]; do
+            sleep 5;
+          done;
+          echo 'Executing ksqlDB scripts...';
+          ksql http://ksqldb-server:8088 -f /scripts/init.sql"
+
+  ksqldb-cli:
+    image: confluentinc/cp-ksqldb-cli:7.6.0
+    container_name: ksqldb-cli
+    depends_on:
+      - ksqldb-server
+    entrypoint: /bin/sh
+    tty: true
+
+volumes:
+  mongo-data:
+  sqlserver-data:

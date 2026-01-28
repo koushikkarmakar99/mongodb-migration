@@ -1,0 +1,20 @@
+{
+  "name": "mongodb-delivery-scan-sink",
+  "config": {
+    "connector.class": "com.mongodb.kafka.connect.MongoSinkConnector",
+    "tasks.max": "2",
+    "topics": "sqlserver-delivery_scans",
+    "connection.uri": "mongodb://mongodb:27017",
+    "database": "mailtracking",
+    "collection": "delivery_scans",
+    "key.converter": "org.apache.kafka.connect.storage.StringConverter",
+    "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "value.converter.schemas.enable": "false",
+    "writemodel.strategy": "com.mongodb.kafka.connect.sink.writemodel.strategy.ReplaceOneBusinessKeyStrategy",
+    "document.id.strategy": "com.mongodb.kafka.connect.sink.processor.id.strategy.PartialValueStrategy",
+    "document.id.strategy.partial.value.projection.type": "AllowList",
+    "document.id.strategy.partial.value.projection.list": "delivery_scan_id",
+    "post.processor.chain": "com.mongodb.kafka.connect.sink.processor.DocumentIdAdder",
+    "max.batch.size": "1000"
+  }
+}

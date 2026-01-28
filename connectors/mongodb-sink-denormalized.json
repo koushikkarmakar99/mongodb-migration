@@ -1,0 +1,19 @@
+{
+  "name": "mongodb-denormalized-sink",
+  "config": {
+    "connector.class": "com.mongodb.kafka.connect.MongoSinkConnector",
+    "tasks.max": "1",
+    "topics": "denormalized_mailpieces",
+    "connection.uri": "mongodb://mongodb:27017",
+    "database": "mailtracking",
+    "collection": "mailpieces_with_scans",
+    "key.converter": "org.apache.kafka.connect.storage.StringConverter",
+    "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "value.converter.schemas.enable": "false",
+    "writemodel.strategy": "com.mongodb.kafka.connect.sink.writemodel.strategy.ReplaceOneBusinessKeyStrategy",
+    "document.id.strategy": "com.mongodb.kafka.connect.sink.processor.id.strategy.PartialValueStrategy",
+    "document.id.strategy.partial.value.projection.type": "AllowList",
+    "document.id.strategy.partial.value.projection.list": "imb",
+    "post.processor.chain": "com.mongodb.kafka.connect.sink.processor.DocumentIdAdder"
+  }
+}

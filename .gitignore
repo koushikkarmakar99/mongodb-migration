@@ -1,0 +1,11 @@
+# Environment variables
+.env
+
+# Database data directories (local persistence)
+mongo-data/
+sqlserver-data/
+plugins/
+
+# IDE files
+.vscode/
+
