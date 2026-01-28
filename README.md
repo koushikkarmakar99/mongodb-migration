@@ -35,6 +35,9 @@ You can perform all setup steps (Folder creation, Infrastructure, Database Init,
 
 **Bash (Linux/macOS/WSL):**
 ```bash
+# If using Podman and the service is not running, initialize the socket:
+podman system service -t 0 unix:///tmp/podman.sock &
+export DOCKER_HOST=unix:///tmp/podman.sock
 chmod +x setup.sh
 ./setup.sh
 ```
