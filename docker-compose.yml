@@ -57,6 +57,7 @@ services:
       MONGO_INITDB_DATABASE: mailtracking
     volumes:
       - mongo-data:/data/db
+      - ./mongo/init-mongo.js:/docker-entrypoint-initdb.d/init-mongo.js:ro
 
   sqlserver:
     image: mcr.microsoft.com/mssql/server:2022-latest

@@ -5,9 +5,15 @@ CREATE STREAM IF NOT EXISTS mailpieces_src (
     "mailpiece_id" INT,
     "cust_id" INT,
     "name" STRING,
-    "address" STRING,
+    "address_line_1" STRING,
+    "address_line_2" STRING,
+    "city" STRING,
+    "state" STRING,
+    "zip_code" STRING,
     "imb" STRING,
-    "statement_gen_date" BIGINT
+    "statement_gen_date" BIGINT,
+    "print_sla_date" BIGINT,
+    "delivery_sla_date" BIGINT
 ) WITH (
     KAFKA_TOPIC='sqlserver-mailpieces',
     VALUE_FORMAT='JSON',
@@ -20,10 +26,12 @@ CREATE STREAM IF NOT EXISTS scans_src (
     "imb" STRING,
     "scan_datetime" BIGINT,
     "scan_zipcode" STRING,
-    "delivery_code" INT,
+    "delivery_status" STRING,
     "is_returned" INT,
     "is_forwarded" INT,
-    "forwarded_address" STRING
+    "forwarded_address" STRING,
+    "return_start_date" BIGINT,
+    "forward_start_date" BIGINT
 ) WITH (
     KAFKA_TOPIC='sqlserver-delivery_scans',
     VALUE_FORMAT='JSON',
@@ -34,14 +42,20 @@ CREATE STREAM IF NOT EXISTS scans_src (
 CREATE TABLE IF NOT EXISTS scans_agg_table AS
     SELECT 
         "imb", 
+        LATEST_BY_OFFSET("delivery_status") AS "latest_status",
+        MAX("scan_datetime") AS "latest_scan_datetime",
+        MAX("is_returned") AS "is_returned",
+        MAX("is_forwarded") AS "is_forwarded",
         COLLECT_LIST(STRUCT(
             "delivery_scan_id" := "delivery_scan_id",
             "scan_datetime" := "scan_datetime",
             "scan_zipcode" := "scan_zipcode",
-            "delivery_code" := "delivery_code",
+            "delivery_status" := "delivery_status",
             "is_returned" := CASE WHEN "is_returned" = 1 THEN TRUE ELSE FALSE END,
             "is_forwarded" := CASE WHEN "is_forwarded" = 1 THEN TRUE ELSE FALSE END,
-            "forwarded_address" := "forwarded_address"
+            "forwarded_address" := "forwarded_address",
+            "return_start_date" := "return_start_date",
+            "forward_start_date" := "forward_start_date"
         )) AS "scans"
     FROM scans_src
     GROUP BY "imb"
@@ -54,8 +68,14 @@ CREATE TABLE IF NOT EXISTS mailpieces_table AS
         LATEST_BY_OFFSET("mailpiece_id") AS "mailpiece_id",
         LATEST_BY_OFFSET("cust_id") AS "cust_id",
         LATEST_BY_OFFSET("name") AS "name",
-        LATEST_BY_OFFSET("address") AS "address",
-        LATEST_BY_OFFSET("statement_gen_date") AS "statement_gen_date"
+        LATEST_BY_OFFSET("address_line_1") AS "address_line_1",
+        LATEST_BY_OFFSET("address_line_2") AS "address_line_2",
+        LATEST_BY_OFFSET("city") AS "city",
+        LATEST_BY_OFFSET("state") AS "state",
+        LATEST_BY_OFFSET("zip_code") AS "zip_code",
+        LATEST_BY_OFFSET("statement_gen_date") AS "statement_gen_date",
+        LATEST_BY_OFFSET("print_sla_date") AS "print_sla_date",
+        LATEST_BY_OFFSET("delivery_sla_date") AS "delivery_sla_date"
     FROM mailpieces_src
     GROUP BY "imb";
 
@@ -67,8 +87,21 @@ CREATE TABLE IF NOT EXISTS denormalized_mailpieces WITH (KAFKA_TOPIC='denormaliz
         m."mailpiece_id",
         m."cust_id",
         m."name",
-        m."address",
-        m."statement_gen_date",
+        STRUCT(
+            "address_line_1" := m."address_line_1",
+            "address_line_2" := m."address_line_2",
+            "city" := m."city",
+            "state" := m."state",
+            "zip_code" := m."zip_code"
+        ) AS "address",
+        -- Cast to TIMESTAMP for MongoDB Time Series
+        FROM_UNIXTIME(m."statement_gen_date") AS "statement_gen_date",
+        m."print_sla_date",
+        m."delivery_sla_date",
+        s."latest_status",
+        s."latest_scan_datetime",
+        CASE WHEN s."is_returned" = 1 THEN TRUE ELSE FALSE END AS "is_returned",
+        CASE WHEN s."is_forwarded" = 1 THEN TRUE ELSE FALSE END AS "is_forwarded",
         s."scans"
     FROM mailpieces_table m
     LEFT JOIN scans_agg_table s ON m."imb" = s."imb"

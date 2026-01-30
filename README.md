@@ -11,18 +11,22 @@ This project migrates data from SQL Server to MongoDB in near-real-time using Ka
 ## Plan
 1. **Prepare SQL Server**
    - Add indexes for incremental pulls (see [sql/indexes.sql](sql/indexes.sql)).
+   - Split address fields and added SLA/start dates for better tracking.
 2. **Kafka Connect (Ingest)**
    - Use JDBC Source for SQL Server to pull `mailpieces` and `delivery_scans`.
 3. **ksqlDB (Process)**
    - Join `mailpieces` and `delivery_scans` into a single denormalized stream based on the Intelligent Mail Barcode (`imb`).
+   - Transform flat address fields into a nested `address` object.
+   - Aggregate scans and calculate summary fields like `latest_status`.
 4. **Kafka Connect (Sink)**
    - Use MongoDB Kafka Sink to write the denormalized documents into the `mailpieces_with_scans` collection.
 5. **Validation**
-   - Compare counts and verify document structure in MongoDB.
+   - Compare counts (e.g., 70% Delivered, 15% Returned, 10% Forwarded, 5% No Scans) and verify document structure in MongoDB.
 
 ## Assumptions
 - Near-real-time migration via Change Tracking/Incremental polling.
 - `mailpiece_id` and `delivery_scan_id` are monotonically increasing.
+- **90-Day Retention**: MongoDB documents are automatically deleted after 90 days via TTL index on `statement_gen_date`.
 - **Deletes in SQL Server are NOT reflected in MongoDB** (due to JDBC `incrementing` mode).
 
 ## Automated Setup
@@ -140,7 +144,7 @@ podman logs ksql-setup
 
 **Verify KSQL Streams and Tables:**
 ```bash
-podman exec -it ksqldb-cli ksql http://ksqldb-server:8088 -e "SHOW STREAMS; SHOW TABLES;"
+podman exec -it ksqldb-cli ksql -e "SHOW STREAMS; SHOW TABLES;" http://ksqldb-server:8088
 ```
 
 **Check Kafka Connect Status:**
@@ -160,7 +164,7 @@ curl.exe http://localhost:8083/connectors/mongodb-denormalized-sink/status
 podman exec -it mongodb-migration-kafka-1 kafka-console-consumer --bootstrap-server localhost:9092 --topic denormalized_mailpieces --from-beginning
 
 # Using KSQL
-podman exec -it ksqldb-cli ksql http://ksqldb-server:8088 -e "PRINT 'sqlserver-mailpieces' FROM BEGINNING LIMIT 5;"
+podman exec -it ksqldb-cli ksql -e "PRINT 'sqlserver-mailpieces' FROM BEGINNING LIMIT 5;" http://ksqldb-server:8088
 ```
 
 **Interactive MongoDB Shell:**
@@ -184,8 +188,8 @@ Follow these steps to verify the entire pipeline from SQL Server to MongoDB.
 
 ### Step 1: Insert Sample Data into SQL Server
 ```powershell
-podman exec -it mongodb-migration-sqlserver-1 sqlcmd -S localhost -U sa -P "$env:MSSQL_PASSWORD" -C -Q "INSERT INTO mailtracking.dbo.mailpieces (cust_id, name, address, imb, statement_gen_date) VALUES (999, 'Test User', '123 Main St, Apt 4B, Springfield, IL, 62704-123455', '0070012345688888888881234567890', GETUTCDATE());"
-podman exec -it mongodb-migration-sqlserver-1 sqlcmd -S localhost -U sa -P "$env:MSSQL_PASSWORD" -C -Q "INSERT INTO mailtracking.dbo.delivery_scans (imb, scan_datetime, scan_zipcode, delivery_code, is_returned, is_forwarded) VALUES ('0070012345688888888881234567890', GETUTCDATE(), '62704', 1, 0, 0);"
+podman exec -it mongodb-migration-sqlserver-1 sqlcmd -S localhost -U sa -P "$env:MSSQL_PASSWORD" -C -Q "INSERT INTO mailtracking.dbo.mailpieces (cust_id, name, address_line_1, address_line_2, city, state, zip_code, imb, statement_gen_date) VALUES (999, 'Test User', '123 Main St', 'Apt 4B', 'Springfield', 'IL', '62704', '0070012345688888888881234567890', GETUTCDATE());"
+podman exec -it mongodb-migration-sqlserver-1 sqlcmd -S localhost -U sa -P "$env:MSSQL_PASSWORD" -C -Q "INSERT INTO mailtracking.dbo.delivery_scans (imb, scan_datetime, scan_zipcode, delivery_status, is_returned, is_forwarded) VALUES ('0070012345688888888881234567890', GETUTCDATE(), '62704', 'IN_TRANSIT', 0, 0);"
 ```
 If bulk data insert needs to be tested, use the sample seed like below:
 ```Powershell
@@ -200,13 +204,49 @@ podman exec -it mongodb-migration-kafka-1 kafka-console-consumer --bootstrap-ser
 ```
 
 ### Step 3: Verify ksqlDB Processing
-Check if the denormalized join is working:
-```bash
-podman exec -it ksqldb-cli ksql http://ksqldb-server:8088 -e "SELECT * FROM DENORMALIZED_MAILPIECES WHERE IMB = '0070012345688888888881234567890' EMIT CHANGES LIMIT 1;"
-```
+Check if the denormalized join is working by running ksqlDB interactively:
+1. Enter the ksqlDB CLI:
+   ```bash
+   podman exec -it ksqldb-cli ksql http://ksqldb-server:8088
+   ```
+2. Run the following query (Identifiers like `"imb"` are case-sensitive and must be quoted):
+   ```sql
+   SELECT * FROM DENORMALIZED_MAILPIECES WHERE "imb" = '0070012345688888888881234567890' EMIT CHANGES LIMIT 1;
+   ```
+   *Type `exit` to leave the CLI when done.*
 
 ### Step 4: Verify Final Document in MongoDB
-Verify the final denormalized document with nested scans:
+Verify the final denormalized document with nested scans and structured address:
 ```bash
 podman exec -it mongodb-migration-mongodb-1 mongosh mailtracking --eval "db.mailpieces_with_scans.find({imb: '0070012345688888888881234567890'}).pretty()"
+```
+
+## Data Distribution (Sample Seed)
+The `seed_sample_data.sql` script creates a weighted distribution of 100 mailpieces:
+- **70% Delivered**: 3-7 scans per piece.
+- **15% Returned**: 5-9 scans per piece, ending in `RETURN_DELIVERED`.
+- **10% Forwarded**: 5-9 scans per piece, ending in `FORWARD_DELIVERED`.
+- **5% No Scans**: Only the mailpiece record is created.
+
+## MongoDB Document Schema
+The final document in MongoDB has the following structure:
+```json
+{
+  "mailpiece_id": 1,
+  "imb": "0070012345600000000106202109999",
+  "address": {
+    "address_line_1": "1 Main St",
+    "address_line_2": null,
+    "city": "Springfield",
+    "state": "IL",
+    "zip_code": "62704"
+  },
+  "latest_status": "DELIVERED",
+  "latest_scan_datetime": 1769781438000,
+  "scans": [
+    { "delivery_status": "IN_TRANSIT", ... },
+    { "delivery_status": "DELIVERED", ... }
+  ],
+  "statement_gen_date": 1769723838000
+}
 ```
