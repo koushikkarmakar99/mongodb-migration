@@ -60,13 +60,13 @@ if (-not $sqlReady) {
 Write-Host '--- Initializing Database ---' -ForegroundColor Cyan
 
 Write-Host 'Creating Database...'
-Get-Content -Raw .\sql\init-db.sql | podman exec -i mongodb-migration-sqlserver-1 sqlcmd -S localhost -U sa -P "$env:MSSQL_PASSWORD" -C -d master | Out-Null
+Get-Content -Raw .\sql\init-db.sql | podman exec -i mongodb-migration-sqlserver-1 sqlcmd -S localhost -U sa -P "$env:MSSQL_PASSWORD" -C -d master
 
 Write-Host 'Applying Schema...'
-Get-Content -Raw .\sql\schema.sql | podman exec -i mongodb-migration-sqlserver-1 sqlcmd -S localhost -U sa -P "$env:MSSQL_PASSWORD" -C -d mailtracking | Out-Null
+Get-Content -Raw .\sql\schema.sql | podman exec -i mongodb-migration-sqlserver-1 sqlcmd -S localhost -U sa -P "$env:MSSQL_PASSWORD" -C -d mailtracking
 
 Write-Host 'Creating Indexes...'
-Get-Content -Raw .\sql\indexes.sql | podman exec -i mongodb-migration-sqlserver-1 sqlcmd -S localhost -U sa -P "$env:MSSQL_PASSWORD" -C -d mailtracking | Out-Null
+Get-Content -Raw .\sql\indexes.sql | podman exec -i mongodb-migration-sqlserver-1 sqlcmd -S localhost -U sa -P "$env:MSSQL_PASSWORD" -C -d mailtracking
 
 # 6. Wait for Kafka Connect API
 Write-Host '--- Waiting for Kafka Connect ---' -ForegroundColor Cyan
@@ -122,4 +122,7 @@ Register-Connector 'connectors/sqlserver-jdbc-source-delivery_scans.json'
 Register-Connector 'connectors/mongodb-sink-denormalized.json'
 
 Write-Host "`n--- Setup Complete! ---" -ForegroundColor Green
-Write-Host "Check MongoDB: podman exec -it mongodb-migration-mongodb-1 mongosh mailtracking --eval 'db.mailpieces_with_scans.countDocuments()'"
+Write-Host "Insert test data into SQL Server to begin migration." -ForegroundColor Green
+Write-Host "Access MongoDB at mongodb://localhost:27017" -ForegroundColor Green
+Write-Host "Access KSQLDB at http://localhost:8088" -ForegroundColor Green
+# End of Script

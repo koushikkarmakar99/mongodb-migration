@@ -15,6 +15,15 @@
     "document.id.strategy.partial.value.projection.type": "AllowList",
     "document.id.strategy.partial.value.projection.list": "imb",
     "post.processor.chain": "com.mongodb.kafka.connect.sink.processor.DocumentIdAdder",
-    "max.batch.size": "1000"
-  }
+    "max.batch.size": "1000",
+    "transforms": "convertGenDate,convertPrintSla,convertDeliverySla",
+    "transforms.convertGenDate.type": "org.apache.kafka.connect.transforms.TimestampConverter$Value",
+    "transforms.convertGenDate.target.type": "Date",
+    "transforms.convertGenDate.field": "statement_gen_date",
+    "transforms.convertPrintSla.type": "org.apache.kafka.connect.transforms.TimestampConverter$Value",
+    "transforms.convertPrintSla.target.type": "Date",
+    "transforms.convertPrintSla.field": "print_sla_date",
+    "transforms.convertDeliverySla.type": "org.apache.kafka.connect.transforms.TimestampConverter$Value",
+    "transforms.convertDeliverySla.target.type": "Date",
+    "transforms.convertDeliverySla.field": "delivery_sla_date"}
 }

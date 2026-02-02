@@ -18,58 +18,79 @@ SELECT
     CASE WHEN n % 2 = 0 THEN CONCAT('Suite ', n % 100) ELSE NULL END AS address_line_2,
     'Springfield' AS city,
     'IL' AS state,
-    CASE WHEN n % 3 = 0 THEN '62704-1234' ELSE '62704' END AS zip_code,
+    '62704' + RIGHT(CONCAT('000000', n), 6) AS zip_code,
     -- 31-digit IMB: BarcodeID(2) + ServiceType(3) + MailerID(6) + Serial(9) + Routing(11)
     CONCAT('00700123456', RIGHT(CONCAT('000000000', n), 9), '06202109999') AS imb,
     DATEADD(day, -n, SYSUTCDATETIME()) AS statement_gen_date,
-    DATEADD(hour, 2, DATEADD(day, -n, SYSUTCDATETIME())) AS print_sla_date,
-    DATEADD(day, 2, DATEADD(day, -n, SYSUTCDATETIME())) AS delivery_sla_date
+    DATEADD(day, 2, DATEADD(day, -n, SYSUTCDATETIME())) AS print_sla_date,
+    DATEADD(day, 7, DATEADD(day, -n, SYSUTCDATETIME())) AS delivery_sla_date
 FROM nums;
 
--- 2) Insert delivery_scans rows
--- Distribution: 70% Delivered (3-7 scans), 15% Returned (5-9 scans), 10% Forwarded (5-9 scans), 5% No scans
+-- 2) Insert 600 delivery_scans rows (6 per mailpiece)
 ;WITH mp AS (
-    SELECT 
+    SELECT TOP (100)
         mailpiece_id,
         imb,
-        statement_gen_date,
-        (ROW_NUMBER() OVER (ORDER BY mailpiece_id) - 1) % 100 AS piece_idx,
-        CASE 
-            WHEN (ROW_NUMBER() OVER (ORDER BY mailpiece_id) - 1) % 100 < 70 THEN 3 + (mailpiece_id % 5)
-            WHEN (ROW_NUMBER() OVER (ORDER BY mailpiece_id) - 1) % 100 < 95 THEN 5 + (mailpiece_id % 5)
-            ELSE 0 
-        END AS max_scans
+        statement_gen_date
     FROM dbo.mailpieces
+    ORDER BY mailpiece_id DESC
 ),
 scans AS (
     SELECT v.scan_idx
-    FROM (VALUES (1),(2),(3),(4),(5),(6),(7),(8),(9)) AS v(scan_idx)
+    FROM (VALUES (1),(2),(3),(4),(5),(6)) AS v(scan_idx)
 )
 INSERT INTO dbo.delivery_scans (imb, scan_datetime, scan_zipcode, delivery_status, is_returned, is_forwarded, forwarded_address, return_start_date, forward_start_date)
 SELECT
     mp.imb,
     DATEADD(hour, s.scan_idx * 4, mp.statement_gen_date) AS scan_datetime,
-    RIGHT('00000' + CAST((10000 + (mp.mailpiece_id % 90000)) AS varchar(5)), 5) AS scan_zipcode,
+    '60601' + RIGHT(CONCAT('000000', mp.mailpiece_id), 6) AS scan_zipcode,
     CASE 
-        WHEN s.scan_idx = mp.max_scans THEN 
+        WHEN s.scan_idx < 4 THEN 'IN_TRANSIT'
+        WHEN s.scan_idx BETWEEN 4 AND 5 THEN
             CASE 
-                WHEN mp.piece_idx >= 70 AND mp.piece_idx < 85 THEN 'RETURN_DELIVERED'
-                WHEN mp.piece_idx >= 85 AND mp.piece_idx < 95 THEN 'FORWARD_DELIVERED'
-                ELSE 'DELIVERED'
-            END
-        WHEN s.scan_idx = (mp.max_scans - 1) THEN 
-             CASE 
-                WHEN mp.piece_idx >= 70 AND mp.piece_idx < 85 THEN 'RETURN_IN_TRANSIT'
-                WHEN mp.piece_idx >= 85 AND mp.piece_idx < 95 THEN 'FORWARD_IN_TRANSIT'
+                WHEN (mp.mailpiece_id % 100) BETWEEN 60 AND 74 THEN 'RETURN_IN_TRANSIT'
+                WHEN (mp.mailpiece_id % 100) BETWEEN 75 AND 84 THEN 'RETURN_IN_TRANSIT'
+                WHEN (mp.mailpiece_id % 100) BETWEEN 85 AND 94 THEN 'FORWARD_IN_TRANSIT'
+                WHEN (mp.mailpiece_id % 100) >= 95 THEN 'FORWARD_IN_TRANSIT'
                 ELSE 'IN_TRANSIT'
             END
-        ELSE 'IN_TRANSIT'
+        ELSE -- Final scan (6)
+            CASE 
+                WHEN (mp.mailpiece_id % 100) < 50 THEN 'DELIVERED'
+                WHEN (mp.mailpiece_id % 100) < 60 THEN 'IN_TRANSIT'
+                WHEN (mp.mailpiece_id % 100) < 75 THEN 'RETURN_DELIVERED'
+                WHEN (mp.mailpiece_id % 100) < 85 THEN 'RETURN_IN_TRANSIT'
+                WHEN (mp.mailpiece_id % 100) < 95 THEN 'FORWARD_DELIVERED'
+                ELSE 'FORWARD_IN_TRANSIT'
+            END
     END AS delivery_status,
-    CASE WHEN s.scan_idx = mp.max_scans AND mp.piece_idx >= 70 AND mp.piece_idx < 85 THEN 1 ELSE 0 END AS is_returned,
-    CASE WHEN s.scan_idx >= 4 AND mp.piece_idx >= 85 AND mp.piece_idx < 95 THEN 1 ELSE 0 END AS is_forwarded,
-    CASE WHEN s.scan_idx >= 4 AND mp.piece_idx >= 85 AND mp.piece_idx < 95 THEN CONCAT('Forwarded ', mp.mailpiece_id, ' Oak Ave') ELSE NULL END AS forwarded_address,
-    CASE WHEN mp.piece_idx >= 70 AND mp.piece_idx < 85 THEN DATEADD(hour, 1, mp.statement_gen_date) ELSE NULL END AS return_start_date,
-    CASE WHEN mp.piece_idx >= 85 AND mp.piece_idx < 95 THEN DATEADD(hour, 1, mp.statement_gen_date) ELSE NULL END AS forward_start_date
+    CASE 
+        WHEN (mp.mailpiece_id % 100) BETWEEN 60 AND 84 AND s.scan_idx >= 4 THEN 1
+        ELSE 0 
+    END AS is_returned,
+    CASE 
+        WHEN (mp.mailpiece_id % 100) >= 85 AND s.scan_idx >= 4 THEN 1
+        ELSE 0 
+    END AS is_forwarded,
+    CASE 
+        WHEN (mp.mailpiece_id % 100) >= 85 AND s.scan_idx >= 4 THEN 
+            CONCAT(mp.mailpiece_id + 500, ' Forwarded St', 
+                   CASE WHEN mp.mailpiece_id % 2 = 0 THEN CONCAT(', Apt ', mp.mailpiece_id % 10) ELSE '' END,
+                   ', Chicago, IL, ',
+                   CASE 
+                      WHEN mp.mailpiece_id % 3 = 0 THEN '60601' 
+                      WHEN mp.mailpiece_id % 3 = 1 THEN '60601-1234' 
+                      ELSE '60601123456' 
+                   END)
+        ELSE NULL 
+    END AS forwarded_address,
+    CASE 
+        WHEN (mp.mailpiece_id % 100) BETWEEN 60 AND 84 AND s.scan_idx >= 4 THEN DATEADD(hour, 4 * 4, mp.statement_gen_date)
+        ELSE NULL 
+    END AS return_start_date,
+    CASE 
+        WHEN (mp.mailpiece_id % 100) >= 85 AND s.scan_idx >= 4 THEN DATEADD(hour, 4 * 4, mp.statement_gen_date)
+        ELSE NULL 
+    END AS forward_start_date
 FROM mp
-CROSS JOIN scans s
-WHERE s.scan_idx <= mp.max_scans;
+CROSS JOIN scans s;
